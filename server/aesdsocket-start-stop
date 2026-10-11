@@ -1,0 +1,25 @@
+#!/bin/sh
+
+PID_FILE="/var/run/aesdsocket.pid"
+
+if [ ! -x /usr/bin/aesdsocket ]; then
+    echo "Error (1): /usr/bin/aesdsocket either not found or not an executable"
+    exit 1
+fi
+
+case "$1" in
+    start)
+        echo "Starting aesdsocket daemon"
+        start-stop-daemon -start -background -name aesdsocket -exec /usr/bin/aesdsocket -d
+        ;;
+    stop)
+        echo "Stopping aesdsocket daemon"
+        start-stop-daemon -stop -name aesdsocket -pidfile $PID_FILE
+        ;;
+    *)
+        echo "Usage: $0 {start|stop}"
+        exit 1
+        ;;
+esac
+
+exit 0

@@ -19,5 +19,6 @@
 #define BACKLOG   10
 #define BUF_SIZE  1024
 #define DATA_FILE "/var/tmp/aesdsocketdata"
+#define PID_FILE  "/var/run/aesdsocket.pid"
 
 #endif // AESDSOCKET_H

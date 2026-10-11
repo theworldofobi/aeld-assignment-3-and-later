@@ -153,7 +153,18 @@ int main(int argc, char *argv[])
       close(server_fd);
       return -1;
     }
-    if (pid > 0) { return 0; }
+    if (pid > 0) 
+    { 
+      int pid_fd = open(PID_FILE, O_WRONLY | O_CREAT | O_TRUNC, 0644);
+      if (pid_fd >= 0)
+      {
+        char pid_str[32];
+        snprintf(pid_str, sizeof(pid_str), "%d\n", pid);
+        write(pid_fd, pid_str, strlen(pid_str));
+        close(pid_fd);
+      }
+      return 0; 
+    }
 
     if (setsid() < 0 || chdir("/") != 0) 
     {
@@ -204,5 +215,6 @@ int main(int argc, char *argv[])
   close(server_fd);
   remove(DATA_FILE);
   closelog();
+  remove(PID_FILE);
   return 0;
 }
