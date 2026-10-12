@@ -323,13 +323,8 @@ int main(int argc, char *argv[])
     SLIST_INSERT_HEAD(&head, node, entries);
 
     join_threads(&head, false);
-
-    // handle_client(client_fd);
-
-    // close(client_fd);
-    // syslog(LOG_INFO, "Closed connection from %s", node->ip);
   }
-
+  close(server_fd);
   syslog(LOG_INFO, "Caught signal, exiting");
 
   struct thread_node *node;
@@ -341,7 +336,6 @@ int main(int argc, char *argv[])
   pthread_join(timer_thread, NULL);
   pthread_mutex_destroy(&file_mutex);
 
-  close(server_fd);
   remove(DATA_FILE);
   closelog();
   remove(PID_FILE);
