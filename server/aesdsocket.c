@@ -1,6 +1,7 @@
 #include "aesdsocket.h"
 
 static volatile sig_atomic_t caught_signal = 0;
+static pthread_mutex_t file_mutex = PTHREAD_MUTEX_INITIALIZER;
 
 static void signal_handler(int signo)
 {
@@ -92,13 +93,96 @@ static void handle_client(int client_fd)
     while ((newline = memchr(packet, '\n', packet_len)) != NULL) 
     {
       size_t len = newline - packet + 1;
-      if (append_packet(packet, len) == 0) { send_file(client_fd);}
+
+      pthread_mutex_lock(&file_mutex);
+      int rc = append_packet(packet, len);
+      if (rc == 0) { rc = send_file(client_fd); }
+      pthread_mutex_unlock(&file_mutex);
+
+      if (rc != 0) 
+      {
+        syslog(LOG_ERR, "Error handling packet");
+        free(packet);
+        return;
+      }
+
       memmove(packet, packet + len, packet_len - len);
       packet_len -= len;
     }
   }
 
   free(packet);
+}
+
+static void *connection_thread(void *arg)
+{
+  struct thread_node *node = arg;
+
+  handle_client(node->client_fd);
+  syslog(LOG_INFO, "Closed connection from %s", node->ip);
+
+  node->done = true;
+  return NULL;
+}
+
+static void *timer_thread_func(void *arg)
+{
+  (void)arg;
+  int seconds = 0;
+
+  while (!caught_signal)
+  {
+    sleep(1);
+    seconds++;
+    if (seconds < 10) { continue; }
+    seconds = 0;
+
+    char ts[128];
+    time_t now = time(NULL);
+    struct tm tm_now;
+    localtime_r(&now, &tm_now);
+
+    size_t len = strftime(ts, sizeof(ts), "timestamp:%a, %d %b %Y %H:%M:%S %z\n", &tm_now);
+    if (len == 0) { continue; }
+
+    pthread_mutex_lock(&file_mutex);
+    append_packet(ts, len);
+    pthread_mutex_unlock(&file_mutex);
+  }
+
+  return NULL;
+}
+
+static int start_thread(pthread_t *t, void *(*func)(void *), void *arg)
+{
+  sigset_t block_set, old_set;
+  sigemptyset(&block_set);
+  sigaddset(&block_set, SIGINT);
+  sigaddset(&block_set, SIGTERM);
+
+  pthread_sigmask(SIG_BLOCK, &block_set, &old_set);
+  int rc = pthread_create(t, NULL, func, arg);
+  pthread_sigmask(SIG_SETMASK, &old_set, NULL);
+  return rc;
+}
+
+static void join_threads(struct thread_list *head, bool wait_all)
+{
+  struct thread_node *node = SLIST_FIRST(head);
+
+  while (node != NULL)
+  {
+    struct thread_node *next = SLIST_NEXT(node, entries);
+
+    if (wait_all || node->done)
+    {
+      pthread_join(node->thread, NULL);
+      close(node->client_fd);
+      SLIST_REMOVE(head, node, thread_node, entries);
+      free(node);
+    }
+    node = next;
+  }
 }
 
 int main(int argc, char *argv[])
@@ -160,7 +244,10 @@ int main(int argc, char *argv[])
       {
         char pid_str[32];
         snprintf(pid_str, sizeof(pid_str), "%d\n", pid);
-        write(pid_fd, pid_str, strlen(pid_str));
+        
+        int rc = write(pid_fd, pid_str, strlen(pid_str));
+        if (rc < 0) { syslog(LOG_ERR, "Write PID file failed: %s", strerror(errno)); }
+        
         close(pid_fd);
       }
       return 0; 
@@ -188,12 +275,22 @@ int main(int argc, char *argv[])
     close(server_fd);
     return -1;
   }
+  
+  pthread_t timer_thread;
+  if (start_thread(&timer_thread, timer_thread_func, NULL) != 0)
+  {
+    syslog(LOG_ERR, "Timer thread create failed");
+    close(server_fd);
+    return -1;
+  }
+
+  struct thread_list head;
+  SLIST_INIT(&head);
 
   while (!caught_signal) 
   {
     struct sockaddr_in client_addr;
     socklen_t client_len = sizeof(client_addr);
-    char ip[INET_ADDRSTRLEN];
 
     int client_fd = accept(server_fd, (struct sockaddr *)&client_addr, &client_len);
     if (client_fd < 0) 
@@ -202,16 +299,48 @@ int main(int argc, char *argv[])
       continue;
     }
 
-    inet_ntop(AF_INET, &client_addr.sin_addr, ip, sizeof(ip));
-    syslog(LOG_INFO, "Accepted connection from %s", ip);
+    struct thread_node *node = malloc(sizeof(*node));
+    if (node == NULL)
+    {
+      syslog(LOG_ERR, "malloc failed");
+      close(client_fd);
+      continue;
+    }
+    
+    node->client_fd = client_fd;
+    node->done = false;
 
-    handle_client(client_fd);
+    inet_ntop(AF_INET, &client_addr.sin_addr, node->ip, sizeof(node->ip));
+    syslog(LOG_INFO, "Accepted connection from %s", node->ip);
+    
+    if (start_thread(&node->thread, connection_thread, node) != 0)
+    {
+      syslog(LOG_ERR, "pthread_create failed");
+      close(client_fd);
+      free(node);
+      continue;
+    }
+    SLIST_INSERT_HEAD(&head, node, entries);
 
-    close(client_fd);
-    syslog(LOG_INFO, "Closed connection from %s", ip);
+    join_threads(&head, false);
+
+    // handle_client(client_fd);
+
+    // close(client_fd);
+    // syslog(LOG_INFO, "Closed connection from %s", node->ip);
   }
 
   syslog(LOG_INFO, "Caught signal, exiting");
+
+  struct thread_node *node;
+  SLIST_FOREACH(node, &head, entries) 
+  { 
+    shutdown(node->client_fd, SHUT_RDWR);
+  }
+  join_threads(&head, true);
+  pthread_join(timer_thread, NULL);
+  pthread_mutex_destroy(&file_mutex);
+
   close(server_fd);
   remove(DATA_FILE);
   closelog();

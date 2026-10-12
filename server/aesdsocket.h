@@ -14,11 +14,25 @@
 #include <netinet/in.h>
 #include <unistd.h>
 #include <stdbool.h>
+#include <stdatomic.h>
+#include <pthread.h>
+#include <time.h>
+#include <sys/queue.h>
 
 #define PORT      9000
 #define BACKLOG   10
 #define BUF_SIZE  1024
 #define DATA_FILE "/var/tmp/aesdsocketdata"
 #define PID_FILE  "/var/run/aesdsocket.pid"
+
+struct thread_node {
+  pthread_t thread;
+  int client_fd;
+  char ip[INET_ADDRSTRLEN];
+  atomic_bool done;
+  SLIST_ENTRY(thread_node) entries;
+};
+
+SLIST_HEAD(thread_list, thread_node);
 
 #endif // AESDSOCKET_H
