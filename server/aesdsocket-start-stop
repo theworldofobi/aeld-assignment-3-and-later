@@ -10,11 +10,11 @@ fi
 case "$1" in
     start)
         echo "Starting aesdsocket daemon"
-        start-stop-daemon -start -background -name aesdsocket -exec /usr/bin/aesdsocket -d
+        start-stop-daemon --start --name aesdsocket --exec /usr/bin/aesdsocket -- -d
         ;;
     stop)
         echo "Stopping aesdsocket daemon"
-        start-stop-daemon -stop -name aesdsocket -pidfile $PID_FILE
+        start-stop-daemon --stop --name aesdsocket --pidfile $PID_FILE
         ;;
     *)
         echo "Usage: $0 {start|stop}"
