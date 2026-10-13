@@ -9,15 +9,8 @@ static void signal_handler(int signo)
   caught_signal = 1;
 }
 
-static int append_packet(const char *data, size_t len)
+static int write_all(int fd, const char *data, size_t len)
 {
-  int fd = open(DATA_FILE, DATA_OPEN_FLAGS, 0644);
-  if (fd < 0) 
-  {
-    syslog(LOG_ERR, "Open for append failed: %s", strerror(errno));
-    return -1;
-  }
-
   size_t written = 0;
   while (written < len) 
   {
@@ -25,27 +18,17 @@ static int append_packet(const char *data, size_t len)
     if (n < 0) 
     {
       syslog(LOG_ERR, "Write failed: %s", strerror(errno));
-      close(fd);
       return -1;
     }
     written += n;
   }
-
-  close(fd);
   return 0;
 }
 
-static int send_file(int client_fd)
+static int send_file(int client_fd, int fd)
 {
   char buf[BUF_SIZE];
   ssize_t n;
-
-  int fd = open(DATA_FILE, O_RDONLY);
-  if (fd < 0) 
-  {
-    syslog(LOG_ERR, "Open for read failed: %s", strerror(errno));
-    return -1;
-  }
 
   while ((n = read(fd, buf, sizeof(buf))) > 0) 
   {
@@ -56,15 +39,85 @@ static int send_file(int client_fd)
       if (s < 0) 
       {
         syslog(LOG_ERR, "Send failed: %s", strerror(errno));
-        close(fd);
         return -1;
       }
       sent += s;
     }
   }
 
-  close(fd);
+  if (n < 0)
+  {
+    syslog(LOG_ERR, "Read failed: %s", strerror(errno));
+    return -1;
+  }
   return 0;
+}
+
+// Parses "AESDCHAR_IOCSEEKTO:X,Y\n" where X and Y are unsigned decimal integers
+static bool parse_seekto(const char *data, size_t len, struct aesd_seekto *seekto)
+{
+  const size_t prefix_len = strlen(SEEKTO_PREFIX);
+  char args[32];
+  char *end;
+
+  if (len <= prefix_len || memcmp(data, SEEKTO_PREFIX, prefix_len) != 0) { return false; }
+
+  size_t args_len = len - prefix_len - 1; // drop the trailing newline
+  if (args_len == 0 || args_len >= sizeof(args)) { return false; }
+  memcpy(args, data + prefix_len, args_len);
+  args[args_len] = '\0';
+
+  if (!isdigit((unsigned char)args[0])) { return false; }
+  errno = 0;
+  unsigned long cmd = strtoul(args, &end, 10);
+  if (errno != 0 || cmd > UINT32_MAX || *end != ',') { return false; }
+
+  const char *offset_str = end + 1;
+  if (!isdigit((unsigned char)*offset_str)) { return false; }
+  unsigned long offset = strtoul(offset_str, &end, 10);
+  if (errno != 0 || offset > UINT32_MAX || *end != '\0') { return false; }
+
+  seekto->write_cmd = cmd;
+  seekto->write_cmd_offset = offset;
+  return true;
+}
+
+// Writes the packet (or performs the seek it describes) and sends the file content
+// back using the same file descriptor, so the file offset set by the ioctl is honored
+static int process_packet(int client_fd, const char *data, size_t len)
+{
+  struct aesd_seekto seekto;
+  int rc;
+
+  int fd = open(DATA_FILE, DATA_OPEN_FLAGS, 0644);
+  if (fd < 0) 
+  {
+    syslog(LOG_ERR, "Open failed: %s", strerror(errno));
+    return -1;
+  }
+
+  if (parse_seekto(data, len, &seekto))
+  {
+    if (ioctl(fd, AESDCHAR_IOCSEEKTO, &seekto) != 0)
+    {
+      syslog(LOG_ERR, "Seek to %u,%u failed: %s", seekto.write_cmd, seekto.write_cmd_offset, strerror(errno));
+    }
+    rc = 0;
+  }
+  else
+  {
+    rc = write_all(fd, data, len);
+    if (rc == 0 && lseek(fd, 0, SEEK_SET) < 0)
+    {
+      syslog(LOG_ERR, "Seek failed: %s", strerror(errno));
+      rc = -1;
+    }
+  }
+
+  if (rc == 0) { rc = send_file(client_fd, fd); }
+
+  close(fd);
+  return rc;
 }
 
 static void handle_client(int client_fd)
@@ -95,8 +148,7 @@ static void handle_client(int client_fd)
       size_t len = newline - packet + 1;
 
       pthread_mutex_lock(&file_mutex);
-      int rc = append_packet(packet, len);
-      if (rc == 0) { rc = send_file(client_fd); }
+      int rc = process_packet(client_fd, packet, len);
       pthread_mutex_unlock(&file_mutex);
 
       if (rc != 0) 
@@ -126,6 +178,20 @@ static void *connection_thread(void *arg)
 }
 
 #ifndef USE_AESD_CHAR_DEVICE
+static int append_packet(const char *data, size_t len)
+{
+  int fd = open(DATA_FILE, DATA_OPEN_FLAGS, 0644);
+  if (fd < 0) 
+  {
+    syslog(LOG_ERR, "Open for append failed: %s", strerror(errno));
+    return -1;
+  }
+
+  int rc = write_all(fd, data, len);
+  close(fd);
+  return rc;
+}
+
 static void *timer_thread_func(void *arg)
 {
   (void)arg;

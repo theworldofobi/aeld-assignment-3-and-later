@@ -18,6 +18,10 @@
 #include <pthread.h>
 #include <time.h>
 #include <sys/queue.h>
+#include <sys/ioctl.h>
+#include <ctype.h>
+#include <stdint.h>
+#include "../aesd-char-driver/aesd_ioctl.h"
 
 #define PORT      9000
 #define BACKLOG   10
@@ -29,11 +33,12 @@
 
 #if USE_AESD_CHAR_DEVICE
 #define DATA_FILE       "/dev/aesdchar"
-#define DATA_OPEN_FLAGS (O_WRONLY)
+#define DATA_OPEN_FLAGS (O_RDWR)
 #else
 #define DATA_FILE       "/var/tmp/aesdsocketdata"
-#define DATA_OPEN_FLAGS (O_WRONLY | O_CREAT | O_APPEND)
+#define DATA_OPEN_FLAGS (O_RDWR | O_CREAT | O_APPEND)
 #endif
+#define SEEKTO_PREFIX "AESDCHAR_IOCSEEKTO:"
 #define PID_FILE  "/var/run/aesdsocket.pid"
 
 struct thread_node {

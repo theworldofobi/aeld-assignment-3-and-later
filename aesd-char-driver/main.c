@@ -21,6 +21,7 @@
 #include <linux/string.h>
 #include <linux/uaccess.h>
 #include "aesdchar.h"
+#include "aesd_ioctl.h"
 int aesd_major =   0; // use dynamic major
 int aesd_minor =   0;
 
@@ -142,11 +143,74 @@ out:
     mutex_unlock(&dev->lock);
     return retval;
 }
+
+
+static long aesd_adjust_file_offset(struct file *filp, unsigned int write_cmd,
+                unsigned int write_cmd_offset)
+{
+    struct aesd_dev *dev = filp->private_data;
+    struct aesd_circular_buffer *buffer = &dev->buffer;
+    loff_t pos = 0;
+    long retval = -EINVAL;
+    uint8_t count, idx;
+    unsigned int i;
+
+    if (mutex_lock_interruptible(&dev->lock))
+        return -ERESTARTSYS;
+
+    if (buffer->full)
+        count = AESDCHAR_MAX_WRITE_OPERATIONS_SUPPORTED;
+    else
+        count = (buffer->in_offs + AESDCHAR_MAX_WRITE_OPERATIONS_SUPPORTED - buffer->out_offs)
+                    % AESDCHAR_MAX_WRITE_OPERATIONS_SUPPORTED;
+
+    if (write_cmd >= count)
+        goto out;
+
+    idx = buffer->out_offs;
+    for (i = 0; i < write_cmd; i++) {
+        pos += buffer->entry[idx].size;
+        idx = (idx + 1) % AESDCHAR_MAX_WRITE_OPERATIONS_SUPPORTED;
+    }
+
+    if (write_cmd_offset >= buffer->entry[idx].size)
+        goto out;
+
+    filp->f_pos = pos + write_cmd_offset;
+    retval = 0;
+
+out:
+    mutex_unlock(&dev->lock);
+    return retval;
+}
+
+static long aesd_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
+{
+    struct aesd_seekto seekto;
+
+    PDEBUG("ioctl cmd %u",cmd);
+
+    if (_IOC_TYPE(cmd) != AESD_IOC_MAGIC)
+        return -ENOTTY;
+    if (_IOC_NR(cmd) > AESDCHAR_IOC_MAXNR)
+        return -ENOTTY;
+
+    switch (cmd) {
+    case AESDCHAR_IOCSEEKTO:
+        if (copy_from_user(&seekto, (const void __user *)arg, sizeof(seekto)))
+            return -EFAULT;
+        return aesd_adjust_file_offset(filp, seekto.write_cmd, seekto.write_cmd_offset);
+    default:
+        return -ENOTTY;
+    }
+}
+
 struct file_operations aesd_fops = {
     .owner =    THIS_MODULE,
     .llseek =   aesd_llseek,
     .read =     aesd_read,
     .write =    aesd_write,
+    .unlocked_ioctl = aesd_ioctl,
     .open =     aesd_open,
     .release =  aesd_release,
 };
