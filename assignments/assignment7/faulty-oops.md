@@ -1,5 +1,7 @@
 # Faulty kernel oops
 
+After running `runqemu.sh`, signing in, and running the echo command, I received this output:
+
 ```
 # echo "hello_world" > /dev/faulty
 Unable to handle kernel NULL pointer dereference at virtual address 0000000000000000
@@ -44,5 +46,29 @@ Call trace:
  el0t_64_sync+0x18c/0x190
 Code: d2800001 d2800000 d503233f d50323bf (b900003f)
 ---[ end trace 0000000000000000 ]---
+```
+
+Luckily the initial error message isn't too cryptic, as the issue is a null pointer deference. I was then prompted to sign into Buildroot. I closed the QEMU terminal and ran objdump in my VM:
 
 ```
+$ buildroot/output/host/bin/aarch64-linux-objdump -S buildroot/output/build/ldd-4c974a4a8540c2cd0041b1e89a6d96b57fdc19a0/misc-modules/faulty.ko
+
+buildroot/output/build/ldd-4c974a4a8540c2cd0041b1e89a6d96b57fdc19a0/misc-modules/faulty.ko:     file format elf64-littleaarch64
+
+
+Disassembly of section .text:
+
+0000000000000000 <faulty_write>:
+   0:	d2800001 	mov	x1, #0x0                   	// #0
+   4:	d2800000 	mov	x0, #0x0                   	// #0
+   8:	d503233f 	paciasp
+   c:	d50323bf 	autiasp
+  10:	b900003f 	str	wzr, [x1]
+  14:	d65f03c0 	ret
+  18:	d503201f 	nop
+  1c:	d503201f 	nop
+
+...
+```
+
+This is just the output for `faulty_write`, since this is what the oops message refers to, and also in the "Code" seciton at the bottom of the oops message, the first five instructions match up. It also said the error happened at offset 0x10 in `faulty_write`, which points to the `str wzr, [x1]` which is where the deferencing is happening; at offset 0x0, `x1` is assigned the value of 0x0.
