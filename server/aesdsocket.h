@@ -22,7 +22,18 @@
 #define PORT      9000
 #define BACKLOG   10
 #define BUF_SIZE  1024
-#define DATA_FILE "/var/tmp/aesdsocketdata"
+
+#ifndef USE_AESD_CHAR_DEVICE
+#define USE_AESD_CHAR_DEVICE 1
+#endif
+
+#if USE_AESD_CHAR_DEVICE
+#define DATA_FILE       "/dev/aesdchar"
+#define DATA_OPEN_FLAGS (O_WRONLY)
+#else
+#define DATA_FILE       "/var/tmp/aesdsocketdata"
+#define DATA_OPEN_FLAGS (O_WRONLY | O_CREAT | O_APPEND)
+#endif
 #define PID_FILE  "/var/run/aesdsocket.pid"
 
 struct thread_node {

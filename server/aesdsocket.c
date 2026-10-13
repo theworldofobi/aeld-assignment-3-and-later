@@ -11,7 +11,7 @@ static void signal_handler(int signo)
 
 static int append_packet(const char *data, size_t len)
 {
-  int fd = open(DATA_FILE, O_WRONLY | O_CREAT | O_APPEND, 0644);
+  int fd = open(DATA_FILE, DATA_OPEN_FLAGS, 0644);
   if (fd < 0) 
   {
     syslog(LOG_ERR, "Open for append failed: %s", strerror(errno));
@@ -125,6 +125,7 @@ static void *connection_thread(void *arg)
   return NULL;
 }
 
+#ifndef USE_AESD_CHAR_DEVICE
 static void *timer_thread_func(void *arg)
 {
   (void)arg;
@@ -152,6 +153,7 @@ static void *timer_thread_func(void *arg)
 
   return NULL;
 }
+#endif
 
 static int start_thread(pthread_t *t, void *(*func)(void *), void *arg)
 {
@@ -275,7 +277,8 @@ int main(int argc, char *argv[])
     close(server_fd);
     return -1;
   }
-  
+
+#ifndef USE_AESD_CHAR_DEVICE
   pthread_t timer_thread;
   if (start_thread(&timer_thread, timer_thread_func, NULL) != 0)
   {
@@ -283,6 +286,7 @@ int main(int argc, char *argv[])
     close(server_fd);
     return -1;
   }
+#endif
 
   struct thread_list head;
   SLIST_INIT(&head);
@@ -333,10 +337,14 @@ int main(int argc, char *argv[])
     shutdown(node->client_fd, SHUT_RDWR);
   }
   join_threads(&head, true);
+#if !USE_AESD_CHAR_DEVICE
   pthread_join(timer_thread, NULL);
+#endif
   pthread_mutex_destroy(&file_mutex);
 
+#if !USE_AESD_CHAR_DEVICE
   remove(DATA_FILE);
+#endif
   closelog();
   remove(PID_FILE);
   return 0;
